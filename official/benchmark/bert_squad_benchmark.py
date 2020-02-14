@@ -32,6 +32,7 @@ from official.benchmark import bert_benchmark_utils as benchmark_utils
 from official.benchmark import squad_evaluate_v1_1
 from official.nlp.bert import run_squad
 from official.utils.misc import distribution_utils
+from official.utils.misc import keras_utils
 from official.utils.testing import benchmark_wrappers
 
 
@@ -90,10 +91,22 @@ class BertSquadBenchmarkBase(benchmark_utils.BertBenchmarkBase):
           distribution_strategy='mirrored' if use_ds else 'off',
           num_gpus=self.num_gpus)
 
+  def _init_gpu_and_data_threads(self):
+    """Set env variables before any TF calls."""
+    if FLAGS.tf_gpu_thread_mode:
+      keras_utils.set_gpu_thread_mode_and_count(
+          per_gpu_thread_count=FLAGS.per_gpu_thread_count,
+          gpu_thread_mode=FLAGS.tf_gpu_thread_mode,
+          num_gpus=self.num_gpus,
+          datasets_num_private_threads=FLAGS.datasets_num_private_threads)
+
+
+
   @flagsaver.flagsaver
   def _train_squad(self, use_ds=True, run_eagerly=False):
     """Runs BERT SQuAD training."""
     assert tf.version.VERSION.startswith('2.')
+    self._init_gpu_and_data_threads()
     input_meta_data = self._read_input_meta_data_from_file()
     strategy = self._get_distribution_strategy(use_ds)
 
@@ -107,6 +120,7 @@ class BertSquadBenchmarkBase(benchmark_utils.BertBenchmarkBase):
   def _evaluate_squad(self, use_ds=True):
     """Runs BERT SQuAD evaluation."""
     assert tf.version.VERSION.startswith('2.')
+    self._init_gpu_and_data_threads()
     input_meta_data = self._read_input_meta_data_from_file()
     strategy = self._get_distribution_strategy(use_ds)
 
@@ -171,6 +185,16 @@ class BertSquadBenchmarkReal(BertSquadBenchmarkBase):
 
     self._run_and_report_benchmark()
 
+  def benchmark_1_gpu_eager(self):
+    """Tests BERT SQuAD model performance with 1 GPU."""
+
+    self._setup()
+    self.num_gpus = 1
+    FLAGS.model_dir = self._get_model_dir('benchmark_1_gpu_squad_eager')
+    FLAGS.train_batch_size = 2
+
+    self._run_and_report_benchmark(run_eagerly=True)
+
   def benchmark_1_gpu_xla(self):
     """Tests BERT SQuAD model performance with 1 GPU with XLA."""
 
@@ -231,8 +255,21 @@ class BertSquadBenchmarkReal(BertSquadBenchmarkBase):
     self.num_gpus = 8
     FLAGS.model_dir = self._get_model_dir('benchmark_8_gpu_squad')
     FLAGS.train_batch_size = 32
+    FLAGS.tf_gpu_thread_mode = 'gpu_private'
 
     self._run_and_report_benchmark()
+
+  def benchmark_1_gpu_fp16_eager(self):
+    """Tests BERT SQuAD model performance with 1 GPU and FP16."""
+
+    self._setup()
+    self.num_gpus = 1
+    FLAGS.model_dir = self._get_model_dir('benchmark_1_gpu_squad_fp16_eager')
+    FLAGS.train_batch_size = 4
+    FLAGS.dtype = 'fp16'
+    FLAGS.loss_scale = 'dynamic'
+
+    self._run_and_report_benchmark(run_eagerly=True)
 
   def benchmark_1_gpu_fp16(self):
     """Tests BERT SQuAD model performance with 1 GPU and FP16."""
@@ -292,6 +329,20 @@ class BertSquadBenchmarkReal(BertSquadBenchmarkBase):
     FLAGS.train_batch_size = 32
     FLAGS.dtype = 'fp16'
     FLAGS.loss_scale = 'dynamic'
+    FLAGS.tf_gpu_thread_mode = 'gpu_private'
+
+    self._run_and_report_benchmark()
+
+  def benchmark_8_gpu_xla_fp16(self):
+    """Tests BERT SQuAD model performance with 8 GPUs with XLA."""
+
+    self._setup()
+    self.num_gpus = 8
+    FLAGS.model_dir = self._get_model_dir('benchmark_8_gpu_squad_fp16')
+    FLAGS.train_batch_size = 32
+    FLAGS.enable_xla = True
+    FLAGS.dtype = 'fp16'
+    FLAGS.loss_scale = 'dynamic'
 
     self._run_and_report_benchmark()
 
@@ -328,6 +379,7 @@ class BertSquadBenchmarkReal(BertSquadBenchmarkBase):
     FLAGS.train_batch_size = 32
     FLAGS.dtype = 'fp16'
     FLAGS.fp16_implementation = 'graph_rewrite'
+    FLAGS.tf_gpu_thread_mode = 'gpu_private'
 
     self._run_and_report_benchmark()
 
@@ -400,6 +452,7 @@ class BertSquadAccuracy(BertSquadBenchmarkBase):
     self.num_gpus = 8
     FLAGS.model_dir = self._get_model_dir('benchmark_8_gpu_squad')
     FLAGS.train_batch_size = 24
+    FLAGS.tf_gpu_thread_mode = 'gpu_private'
 
     self._run_and_report_benchmark()
 
@@ -412,6 +465,7 @@ class BertSquadAccuracy(BertSquadBenchmarkBase):
     FLAGS.train_batch_size = 32
     FLAGS.dtype = 'fp16'
     FLAGS.loss_scale = 'dynamic'
+    FLAGS.tf_gpu_thread_mode = 'gpu_private'
 
     self._run_and_report_benchmark()
 
@@ -423,6 +477,7 @@ class BertSquadAccuracy(BertSquadBenchmarkBase):
     FLAGS.model_dir = self._get_model_dir('benchmark_8_gpu_squad_xla')
     FLAGS.train_batch_size = 32
     FLAGS.enable_xla = True
+    FLAGS.tf_gpu_thread_mode = 'gpu_private'
 
     self._run_and_report_benchmark()
 
@@ -481,7 +536,6 @@ class BertSquadMultiWorkerAccuracy(BertSquadBenchmarkBase):
     num_gpus = 8
     FLAGS.num_gpus = num_gpus
     FLAGS.dtype = 'fp16'
-    FLAGS.enable_eager = True,
     FLAGS.enable_xla = False
     FLAGS.distribution_strategy = 'multi_worker_mirrored'
     FLAGS.tf_gpu_thread_mode = 'gpu_private'
@@ -493,6 +547,14 @@ class BertSquadMultiWorkerAccuracy(BertSquadBenchmarkBase):
     FLAGS.all_reduce_alg = all_reduce_alg
 
     self._run_and_report_benchmark()
+
+  def benchmark_eager_8_gpu_2_workers_fp16_ring_tweaked(self):
+    """8 GPUs per worker, 2 workers, fp16, ring all-reduce."""
+    self._benchmark_common(num_workers=2, all_reduce_alg='ring')
+
+  def benchmark_eager_8_gpu_2_workers_fp16_nccl_tweaked(self):
+    """8 GPUs per worker, 2 workers, fp16, nccl all-reduce."""
+    self._benchmark_common(num_workers=2, all_reduce_alg='nccl')
 
   def benchmark_8_gpu_8_workers_fp16_ring_tweaked(self):
     """8 GPUs per worker, 8 workers, fp16, ring all-reduce."""
@@ -546,7 +608,6 @@ class BertSquadMultiWorkerBenchmark(BertSquadBenchmarkBase):
     num_gpus = 8
     FLAGS.num_gpus = num_gpus
     FLAGS.dtype = 'fp16'
-    FLAGS.enable_eager = True
     FLAGS.enable_xla = False
     FLAGS.distribution_strategy = 'multi_worker_mirrored'
     FLAGS.tf_gpu_thread_mode = 'gpu_private'

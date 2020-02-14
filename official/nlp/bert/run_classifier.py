@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""BERT classification finetuning runner in tf2.0."""
-
+"""BERT classification finetuning runner in TF 2.x."""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -27,16 +26,17 @@ from absl import flags
 from absl import logging
 import tensorflow as tf
 
-# pylint: disable=g-import-not-at-top,redefined-outer-name,reimported
 from official.modeling import model_training_utils
-from official.nlp import bert_modeling as modeling
-from official.nlp import bert_models
 from official.nlp import optimization
+from official.nlp.albert import configs as albert_configs
+from official.nlp.bert import bert_models
 from official.nlp.bert import common_flags
+from official.nlp.bert import configs as bert_configs
 from official.nlp.bert import input_pipeline
 from official.nlp.bert import model_saving_utils
 from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
+
 
 flags.DEFINE_enum(
     'mode', 'train_and_eval', ['train_and_eval', 'export_only'],
@@ -123,7 +123,6 @@ def run_bert_classifier(strategy,
     classifier_model, core_model = (
         bert_models.classifier_model(
             bert_config,
-            tf.float32,
             num_classes,
             max_seq_length,
             hub_module_url=FLAGS.hub_module_url))
@@ -271,8 +270,10 @@ def export_classifier(model_export_path, input_meta_data,
   if not model_dir:
     raise ValueError('Export path is not specified: %s' % model_dir)
 
+  # Export uses float32 for now, even if training uses mixed precision.
+  tf.keras.mixed_precision.experimental.set_policy('float32')
   classifier_model = bert_models.classifier_model(
-      bert_config, tf.float32, input_meta_data['num_labels'],
+      bert_config, input_meta_data['num_labels'],
       input_meta_data['max_seq_length'])[0]
 
   model_saving_utils.export_bert_model(
@@ -288,10 +289,11 @@ def run_bert(strategy,
              eval_input_fn=None):
   """Run BERT training."""
   if FLAGS.model_type == 'bert':
-    bert_config = modeling.BertConfig.from_json_file(FLAGS.bert_config_file)
+    bert_config = bert_configs.BertConfig.from_json_file(FLAGS.bert_config_file)
   else:
     assert FLAGS.model_type == 'albert'
-    bert_config = modeling.AlbertConfig.from_json_file(FLAGS.bert_config_file)
+    bert_config = albert_configs.AlbertConfig.from_json_file(
+        FLAGS.bert_config_file)
   if FLAGS.mode == 'export_only':
     # As Keras ModelCheckpoint callback used with Keras compile/fit() API
     # internally uses model.save_weights() to save checkpoints, we must
